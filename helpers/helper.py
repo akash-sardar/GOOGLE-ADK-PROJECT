@@ -9,7 +9,7 @@ from google.adk.sessions import InMemorySessionService, Session
 from google.adk.runners import Runner
 from typing import Optional, Dict, Any
 
-# these expect to find a .env file at the directory above the root.                                                                                                                     # the format for that file is (without the comment)                                                                                                                                       #API_KEYNAME=AStringThatIsTheLongAPIKeyFromSomeService                                                                                                                                     
+# these expect to find a .env file at the directory above the lesson.                                                                                                                     # the format for that file is (without the comment)                                                                                                                                       #API_KEYNAME=AStringThatIsTheLongAPIKeyFromSomeService                                                                                                                                     
 def load_env():
     _ = load_dotenv(find_dotenv())
 
