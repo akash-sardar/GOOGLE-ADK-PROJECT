@@ -1,7 +1,5 @@
-'''
-This code creates a Neo4j database wrapper designed to work with GOOGLE AGENT DEVELOPMENT KIT.
-'''
 import os
+import re
 from typing import Any, Dict
 import atexit
 
@@ -11,6 +9,7 @@ load_dotenv()
 from neo4j import (
     GraphDatabase,
     Result,
+    Driver as GraphDatabaseDriver
 )
 
 def tool_success(key:str,result: Any) -> Dict[str, Any]:
@@ -27,20 +26,11 @@ def tool_error(message: str) -> Dict[str, Any]:
         'error_message': message
     }
 
+def sanitize(cypher_name: str) -> str:
+    """Very basic string sanitization when a query param is not possible."""
+    return re.sub("[.,-:$()><{}[\]'\"`\s]", '', cypher_name)
+
 def to_python(value):
-    """
-    This is a recursive converter that transforms Neo4j-specific data types into standard Python objects:
-
-    Record: Neo4j query result record → Python dictionary
-    Node: Neo4j node → Dictionary with id, labels, and properties
-    Relationship: Neo4j relationship → Dictionary with id, type, start/end nodes, properties
-    Path: Neo4j path → Dictionary with nodes and relationships arrays
-    Neo4j time objects: Various time types → ISO format strings or string representations
-    Standard types: Lists, dicts → Recursively converted
-    Other types: Returned as-is
-
-    This ensures all Neo4j data can be serialized to JSON or used in standard Python contexts.
-    """
     from neo4j.graph import Node, Relationship, Path
     from neo4j import Record
     import neo4j.time
@@ -56,12 +46,12 @@ def to_python(value):
             "labels": list(value.labels),
             "properties": to_python(dict(value))
         }
-    elif isinstance(value, Relationship):
+    elif isinstance(value, Relationship) and value.start_node and value.end_node:
         return {
             "id": value.id,
             "type": value.type,
-            "start_node": value.start_node.id,
-            "end_node": value.end_node.id,
+            "start_node": value.start_node.element_id,
+            "end_node": value.end_node.element_id,
             "properties": to_python(dict(value))
         }
     elif isinstance(value, Path):
@@ -78,7 +68,7 @@ def to_python(value):
 
 
 def result_to_adk(result: Result) -> Dict[str, Any]:
-    eager_result = result.to_eager_result() #  Forces the lazy Neo4j result to be fully loaded into memory
+    eager_result = result.to_eager_result()
     records = [to_python(record.data()) for record in eager_result.records]
     return tool_success("query_result",records)
 
@@ -87,13 +77,17 @@ class Neo4jForADK:
     """
     A wrapper for querying Neo4j which returns ADK-friendly responses.
     """
-    _driver = None
-    # database_name = "neo4j"
+    _driver: GraphDatabaseDriver
+    database_name = "neo4j"
 
     def __init__(self):
         neo4j_uri = os.getenv("NEO4J_URI")
+        if not neo4j_uri:
+            raise ValueError("NEO4J_URI environment variable is not set.")
         neo4j_username = os.getenv("NEO4J_USERNAME") or "neo4j"
         neo4j_password = os.getenv("NEO4J_PASSWORD")
+        if not neo4j_password:
+            raise ValueError("NEO4J_PASSWORD environment variable is not set.")
         neo4j_database = os.getenv("NEO4J_DATABASE") or os.getenv("NEO4J_USERNAME") or "neo4j"
         self.database_name = neo4j_database
         self._driver =  GraphDatabase.driver(
@@ -108,15 +102,6 @@ class Neo4jForADK:
         return self._driver.close()
     
     def send_query(self, cypher_query, parameters=None) -> Dict[str, Any]:
-        """
-        Query Method
-        - Creates a new session for each query
-        - Runs the Cypher query with optional parameters
-        - Converts results to ADK format on success
-        - Returns error format on exceptions
-        - Always closes the session (important for connection management)        
-
-        """
         session = self._driver.session()
         try:
             result = session.run(
@@ -129,6 +114,17 @@ class Neo4jForADK:
             return tool_error(str(e))
         finally:
             session.close()
+
+    def get_import_directory(self):
+        results = self.send_query("""
+            Call dbms.listConfig() YIELD name, value
+            WHERE name CONTAINS 'server.directories.import'
+            RETURN value as import_dir
+            """)
+        if results["status"] == "success":
+            return tool_success("neo4j_import_dir",results["query_result"][0]["import_dir"])
+        else:
+            return tool_error(results["error_message"])
 
 
 graphdb = Neo4jForADK()
